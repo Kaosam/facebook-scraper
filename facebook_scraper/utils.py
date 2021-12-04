@@ -13,10 +13,18 @@ from requests_html import DEFAULT_URL, Element, PyQuery
 import json
 
 from . import exceptions
-import logging
 import time
+import logging
+
+from pathlib import Path
+from logging.handlers import RotatingFileHandler
 
 logger = logging.getLogger(__name__)
+logFolder = Path("")
+logFile = logFolder / "facebook.log"
+fileHandler = RotatingFileHandler(logFile, maxBytes=1000000, backupCount=10)
+logger.addHandler(fileHandler)
+logger.setLevel(logging.DEBUG)
 
 
 def find_and_search(node, selector, pattern, cast=str):
@@ -73,16 +81,7 @@ def filter_query_params(url, whitelist=None, blacklist=None) -> str:
     return urlunparse(parsed_url._replace(query=query_string))
 
 
-def combine_url_params(url1, url2) -> str:
-    parsed_url = urlparse(url1)
-    parsed_url2 = urlparse(url2)
-    query_params = parse_qsl(parsed_url.query) + parse_qsl(parsed_url2.query)
-    query_string = urlencode([(k, v) for k, v in query_params])
-    return urlunparse(parsed_url._replace(query=query_string))
-
-
 def remove_control_characters(html):
-    # type: (t.Text) -> t.Text
     """
     Strip invalid XML characters that `lxml` cannot parse.
     """
@@ -130,69 +129,81 @@ def make_html_element(html: str, url=DEFAULT_URL) -> Element:
     pq_element = PyQuery(html)[0]  # PyQuery is a list, so we take the first element
     return Element(element=pq_element, url=url)
 
+monthNames = {
+    "gennaio": 1,
+    "febbraio": 2,
+    "marzo": 3,
+    "aprile": 4,
+    "maggio": 5,
+    "giugno": 6,
+    "luglio": 7,
+    "agosto": 8,
+    "settembre": 9,
+    "ottobre": 10,
+    "novembre": 11,
+    "dicembre": 12
+}
 
 month = (
-    r"Jan(?:uary)?|"
-    r"Feb(?:ruary)?|"
-    r"Mar(?:ch)?|"
-    r"Apr(?:il)?|"
-    r"May|"
-    r"Jun(?:e)?|"
-    r"Jul(?:y)?|"
-    r"Aug(?:ust)?|"
-    r"Sep(?:tember)?|"
-    r"Oct(?:ober)?|"
-    r"Nov(?:ember)?|"
-    r"Dec(?:ember)?"
+    r"gen(?:naio)?|"
+    r"feb(?:braio)?|"
+    r"mar(?:zo)?|"
+    r"apr(?:ile)?|"
+    r"mag(?:gio)?|"
+    r"giu(?:gno)?|"
+    r"lug(?:lio)?|"
+    r"ago(?:sto)?|"
+    r"set(?:tembre)?|"
+    r"ott(?:tobre)?|"
+    r"nov(?:embre)?|"
+    r"dic(?:embre)?"
 )
-day_of_week = r"Mon|" r"Tue|" r"Wed|" r"Thu|" r"Fri|" r"Sat|" r"Sun"
 day_of_month = r"\d{1,2}"
-specific_date_md = f"(?:{month}) {day_of_month}" + r"(?:,? \d{4})?"
-specific_date_dm = f"{day_of_month} (?:{month})" + r"(?:,? \d{4})?"
+specific_date = f"{day_of_month} (?:{month})"
+specific_date_full = f"{day_of_month} (?:{month})" + r"(?:,? \d{4})?"
 
-date = f"{specific_date_md}|{specific_date_dm}|Today|Yesterday"
+date = f"{specific_date}"
+dateFull = f"{specific_date_full}"
 
-hour = r"\d{1,2}"
+hour = r"\d{2}"
 minute = r"\d{2}"
-period = r"AM|PM|"
 
-exact_time = f"(?:{date}) at {hour}:{minute} ?(?:{period})"
-relative_time_years = r'\b\d{1,2} yr'
-relative_time_months = r'\b\d{1,2} (?:mth|mo)'
-relative_time_weeks = r'\b\d{1,2} wk'
-relative_time_hours = r"\b\d{1,2} ?h(?:rs?)?"
-relative_time_mins = r"\b\d{1,2} ?mins?"
-relative_time = f"{relative_time_years}|{relative_time_months}|{relative_time_weeks}|{relative_time_hours}|{relative_time_mins}"
+exact_time = f"(?:{date}) alle ore {hour}:{minute}"
+exact_time_past_years = f"(?:{dateFull}) alle ore {hour}:{minute}"
+relative_time_days = r'\b\d{1} g'
+relative_time_hours = r"\b\d{1,2} h"
 
-datetime_regex = re.compile(fr"({exact_time}|{relative_time})", re.IGNORECASE)
-day_of_week_regex = re.compile(fr"({day_of_week})", re.IGNORECASE)
+datetime_regex1 = re.compile(fr"({exact_time})", re.IGNORECASE)
+datetime_regex2 = re.compile(fr"({relative_time_days})", re.IGNORECASE)
+datetime_regex3 = re.compile(fr"({relative_time_hours})", re.IGNORECASE)
+datetime_regex4 = re.compile(fr"({exact_time_past_years})", re.IGNORECASE)
 
 
-def parse_datetime(text: str, search=True) -> Optional[datetime]:
-    """Looks for a string that looks like a date and parses it into a datetime object.
-
-    Uses a regex to look for the date in the string.
-    Uses dateparser to parse the date (not thread safe).
-
-    Args:
-        text: The text where the date should be.
-        search: If false, skip the regex search and try to parse the complete string.
-
-    Returns:
-        The datetime object, or None if it couldn't find a date.
-    """
+def parse_datetime(text: str, search=True) -> Optional[datetime]:    
     if search:
-        time_match = datetime_regex.search(text)
-        dow_match = day_of_week_regex.search(text)
-        if time_match:
-            text = time_match.group(0).replace("mth", "month")
-        elif dow_match:
-            text = dow_match.group(0)
-            today = calendar.day_abbr[datetime.today().weekday()]
-            if text == today:
-                # Fix for dateparser misinterpreting "last Monday" as today if today is Monday
-                return dateparser.parse(text) - timedelta(days=7)
-
+        logger.debug(f"Parsing date {text}")
+        if datetime_regex1.search(text):
+            day = int(text.split(" ")[0])
+            month = monthNames[text.split(" ")[1]]
+            year = 2021
+            hour = int(text.split(" ")[4].split(":")[0])
+            minute = int(text.split(" ")[4].split(":")[1])
+            return datetime(year, month, day, hour, minute)
+        if datetime_regex2.search(text):
+            return None
+            # la data con i giorni (esempio "7 g") non viene presa mai, ma convertita nel primo caso
+        if datetime_regex3.search(text):
+            hours_ago = int(text.split(" ")[0])
+            d = datetime.today() - timedelta(hours=hours_ago)
+            return d
+        if datetime_regex4.search(text):
+            day = int(text.split(" ")[0])
+            month = monthNames[text.split(" ")[1]]
+            year = int(text.split(" ")[2])
+            hour = int(text.split(" ")[5].split(":")[0])
+            minute = int(text.split(" ")[5].split(":")[1])
+            return datetime(year, month, day, hour, minute)
+            
     result = dateparser.parse(text)
     if result:
         return result.replace(microsecond=0)

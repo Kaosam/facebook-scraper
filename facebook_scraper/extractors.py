@@ -13,15 +13,15 @@ from . import utils, exceptions
 from .constants import FB_BASE_URL, FB_MOBILE_BASE_URL, FB_W3_BASE_URL
 from .fb_types import Options, Post, RawPost, RequestFunction, Response, URL
 
-
-try:
-    from youtube_dl import YoutubeDL
-    from youtube_dl.utils import ExtractorError
-except ImportError:
-    YoutubeDL = None
-
+from pathlib import Path
+from logging.handlers import RotatingFileHandler
 
 logger = logging.getLogger(__name__)
+logFolder = Path("")
+logFile = logFolder / "facebook.log"
+fileHandler = RotatingFileHandler(logFile, maxBytes=1000000, backupCount=10)
+logger.addHandler(fileHandler)
+logger.setLevel(logging.INFO)
 
 # Typing
 PartialPost = Optional[Dict[str, Any]]
@@ -173,7 +173,7 @@ class PostExtractor:
 
         def log_warning(msg, *args):
             post_id = self.post.get('post_id', 'unknown post')
-            logger.warning(f"[%s] {msg}", post_id, *args)
+            logger.info(f"[%s] {msg}", post_id, *args)
 
         for method in methods:
             try:
@@ -305,7 +305,7 @@ class PostExtractor:
     def extract_time(self) -> PartialPost:
         # Try to extract time for timestamp
         page_insights = self.data_ft.get('page_insights', {})
-
+        
         for page in page_insights.values():
             try:
                 timestamp = page['post_context']['publish_time']
@@ -318,18 +318,14 @@ class PostExtractor:
 
         # Try to extract from the abbr element
         date_element = self.element.find('abbr', first=True)
+        
         if date_element is not None:
-            date = utils.parse_datetime(date_element.text, search=False)
+            date = utils.parse_datetime(date_element.text, search=True)
             if date:
                 return {'time': date}
             logger.debug("Could not parse date: %s", date_element.text)
         else:
             logger.warning("Could not find the abbr element for the date")
-
-        # Try to look in the entire text
-        date = utils.parse_datetime(self.element.text)
-        if date:
-            return {'time': date}
 
         try:
             date_element = self.full_post_html.find("abbr[data-store*='time']", first=True)
@@ -496,9 +492,7 @@ class PostExtractor:
             return None
 
     def extract_photo_link(self) -> PartialPost:
-        if not self.options.get("allow_extra_requests", True) or not self.options.get(
-            "HQ_images", True
-        ):
+        if not self.options.get("allow_extra_requests", True):
             return None
         images = []
         descriptions = []
@@ -717,7 +711,7 @@ class PostExtractor:
         reaction_lookup = self.get_jsmod("UFIReactionTypes")
         if reaction_lookup:
             reaction_lookup = reaction_lookup.get("reactions")
-            for k, v in self.live_data.get("reactioncountmap", {}).items():
+            for k, v in self.live_data.get("reactioncountmap").items():
                 if v["default"]:
                     name = reaction_lookup[k]["display_name"].lower()
                     reactions[name] = v["default"]
@@ -818,25 +812,6 @@ class PostExtractor:
         return None
 
     def extract_video_highres(self):
-        if not YoutubeDL:
-            raise ModuleNotFoundError(
-                "youtube-dl must be installed to download videos in high resolution."
-            )
-
-        ydl_opts = {
-            'format': 'best',
-            'quiet': True,
-        }
-        if self.options.get('youtube_dl_verbose'):
-            ydl_opts['quiet'] = False
-
-        try:
-            with YoutubeDL(ydl_opts) as ydl:
-                url = ydl.extract_info(self.post.get("post_url"), download=False)['url']
-                return {'video': url}
-        except ExtractorError as ex:
-            logger.error("Error extracting video with youtube-dl: %r", ex)
-
         return None
 
     def extract_video_thumbnail(self):
@@ -964,7 +939,7 @@ class PostExtractor:
         if date_element:
             date = utils.parse_datetime(date_element.text, search=True)
             if not date:
-                logger.debug(f"Unable to parse {date_element.text}")
+                logger.info(f"Unable to parse {date_element.text}")
         else:
             date = None
 
@@ -1102,15 +1077,10 @@ class PostExtractor:
         request_url_callback = self.options.get('comment_request_url_callback')
         more_url = None
         if more:
-            if self.options.get("response_url"):
-                more_url = utils.combine_url_params(
-                    self.options.get("response_url"), more.attrs.get("href")
-                )
-            else:
-                more_url = (
-                    more.attrs.get("href")
-                    + "&m_entstream_source=video_home&player_suborigin=entry_point&player_format=permalink"
-                )
+            more_url = (
+                more.attrs.get("href")
+                + "&m_entstream_source=video_home&player_suborigin=entry_point&player_format=permalink"
+            )
         if self.options.get("comment_start_url"):
             more_url = self.options.get("comment_start_url")
 
@@ -1146,15 +1116,10 @@ class PostExtractor:
                     yield result
             more = elem.find(more_selector, first=True)
             if more:
-                if self.options.get("response_url"):
-                    more_url = utils.combine_url_params(
-                        self.options.get("response_url"), more.attrs.get("href")
-                    )
-                else:
-                    more_url = (
-                        more.attrs.get("href")
-                        + "&m_entstream_source=video_home&player_suborigin=entry_point&player_format=permalink"
-                    )
+                more_url = (
+                    more.attrs.get("href")
+                    + "&m_entstream_source=video_home&player_suborigin=entry_point&player_format=permalink"
+                )
             else:
                 more_url = None
 
@@ -1186,7 +1151,7 @@ class PostExtractor:
                 links = response.html.find("#root .item>div>div>a:not(.touchable)")
                 for link in links:
                     people.append({"name": link.text, "link": link.attrs["href"]})
-            return {"with": people, "header": self.element.find("header h3", first=True).text}
+            return {"with": people}
 
     @property
     def data_ft(self) -> dict:
@@ -1212,12 +1177,7 @@ class PostExtractor:
         if self.options.get("allow_extra_requests", True) and self.post.get('post_id'):
             url = self.post.get('post_id')
             logger.debug(f"Fetching {url}")
-            try:
-                response = self.request(url)
-            except exceptions.NotFound as e:
-                url = self.post.get('post_url').replace(FB_BASE_URL, FB_MOBILE_BASE_URL)
-                logger.debug(f"Fetching {url}")
-                response = self.request(url)
+            response = self.request(url)
             self._full_post_html = response.html
             return self._full_post_html
         else:
