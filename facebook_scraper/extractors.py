@@ -11,13 +11,13 @@ from tqdm.auto import tqdm
 
 from . import utils, exceptions
 from .constants import FB_BASE_URL, FB_MOBILE_BASE_URL, FB_W3_BASE_URL
-from .fb_types import Options, Post, RawPost, RequestFunction, Response, URL
+from .fb_types import Options, Post, RawPost, RequestFunction, URL
 
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
 logger = logging.getLogger(__name__)
-logFolder = Path("")
+logFolder = Path("app/scripts/logs/")
 logFile = logFolder / "facebook.log"
 fileHandler = RotatingFileHandler(logFile, maxBytes=1000000, backupCount=10)
 logger.addHandler(fileHandler)

@@ -20,7 +20,7 @@ from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
 logger = logging.getLogger(__name__)
-logFolder = Path("")
+logFolder = Path("app/scripts/logs/")
 logFile = logFolder / "facebook.log"
 fileHandler = RotatingFileHandler(logFile, maxBytes=1000000, backupCount=10)
 logger.addHandler(fileHandler)
